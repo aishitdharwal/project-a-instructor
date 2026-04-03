@@ -1,23 +1,19 @@
 """
-Evaluation Harness — Session 2 (Instructor Version)
+Evaluation Harness — Session 1 (Instructor Version)
 
 Runs the golden dataset through the RAG pipeline and scores:
 1. Retrieval Hit Rate + MRR
 2. Answer Faithfulness (LLM-as-judge)
 3. Answer Correctness (LLM-as-judge)
 
-Session 2 additions:
-- Stratified scoring (category × difficulty breakdown)
-- LangFuse score attachment per trace
-- --save-baseline flag to lock in current scores as baseline
-- --include-hard flag for the 89% → 52% demo moment
-- --category flag to filter by category
+Session 1 features:
+- Hard queries list (--include-hard) for the 89% → 52% demo moment
+- Worst 5 queries table to surface failure patterns
+- Easy vs Hard comparison table
 
 Run:
   python scripts/eval_harness.py
   python scripts/eval_harness.py --include-hard
-  python scripts/eval_harness.py --save-baseline
-  python scripts/eval_harness.py --category membership
 """
 import os
 import sys
@@ -32,7 +28,6 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import box
 from dotenv import load_dotenv
-from langfuse import Langfuse
 
 load_dotenv()
 
@@ -40,7 +35,6 @@ from scripts.rag import ask
 
 client = OpenAI()
 console = Console()
-langfuse = Langfuse()
 
 SCRIPT_DIR = os.path.dirname(__file__)
 
@@ -236,34 +230,6 @@ def calculate_mrr(retrieved_chunks: list, expected_source: str) -> float:
 
 
 # =============================================================================
-# SESSION 2: LANGFUSE SCORE ATTACHMENT
-# =============================================================================
-
-def attach_langfuse_scores(trace_id: str, faithfulness: dict, correctness: dict, retrieval_hit: bool):
-    """Attach eval scores to a LangFuse trace so they're queryable in the dashboard."""
-    try:
-        langfuse.score(
-            trace_id=trace_id,
-            name="faithfulness",
-            value=faithfulness["score"] / 5,
-            comment=faithfulness["reason"],
-        )
-        langfuse.score(
-            trace_id=trace_id,
-            name="correctness",
-            value=correctness["score"] / 5,
-            comment=correctness["reason"],
-        )
-        langfuse.score(
-            trace_id=trace_id,
-            name="retrieval_hit",
-            value=1.0 if retrieval_hit else 0.0,
-        )
-    except Exception as e:
-        console.print(f"[dim red]LangFuse score attachment failed: {e}[/]")
-
-
-# =============================================================================
 # SCORING HELPERS
 # =============================================================================
 
@@ -279,24 +245,18 @@ def score_color(val: float) -> str:
 # MAIN EVAL RUNNER
 # =============================================================================
 
-def run_eval(include_hard: bool = False, save_baseline: bool = False,
-             attach_scores: bool = True, category_filter: str = None):
+def run_eval(include_hard: bool = False):
 
-    # Load golden dataset
     with open(os.path.join(SCRIPT_DIR, "golden_dataset.json")) as f:
         queries = json.load(f)
 
     if include_hard:
         queries.extend(HARD_QUERIES)
 
-    if category_filter:
-        queries = [q for q in queries if q.get("category", "").startswith(category_filter)]
-        console.print(f"[dim]Filtered to {len(queries)} queries in category: {category_filter}[/]")
-
     console.print(Panel(
         f"[bold]Running evaluation on {len(queries)} queries[/]\n"
-        f"[dim]Hard queries: {include_hard} | LangFuse scores: {attach_scores}[/]",
-        title="[bold cyan]Eval Harness — Session 2[/]",
+        f"[dim]Hard queries: {include_hard}[/]",
+        title="[bold cyan]Eval Harness — Session 1[/]",
         border_style="cyan",
     ))
 
@@ -325,10 +285,6 @@ def run_eval(include_hard: bool = False, save_baseline: bool = False,
             q.get("required_points")
         )
         correctness_scores.append(correct["score"])
-
-        # Attach to LangFuse
-        if attach_scores and result.get("trace_id"):
-            attach_langfuse_scores(result["trace_id"], faith, correct, hit)
 
         results.append({
             "id": q["id"],
@@ -377,80 +333,6 @@ def run_eval(include_hard: bool = False, save_baseline: bool = False,
         f"Average: {avg_correct:.2f}/5.0")
 
     console.print(scores_table)
-
-    # =========================================================================
-    # SESSION 2: STRATIFIED SCORING — CATEGORY BREAKDOWN
-    # =========================================================================
-    console.print()
-    cat_table = Table(title="Score by Category (Stratified)", box=box.SIMPLE, title_style="bold magenta")
-    cat_table.add_column("Category", style="cyan", width=20)
-    cat_table.add_column("Count", justify="center", width=7)
-    cat_table.add_column("Hit Rate", justify="center", width=9)
-    cat_table.add_column("MRR", justify="center", width=7)
-    cat_table.add_column("Faithfulness", justify="center", width=13)
-    cat_table.add_column("Correctness", justify="center", width=12)
-
-    categories = {}
-    for r in results:
-        cat = r["category"]
-        if cat not in categories:
-            categories[cat] = {"count": 0, "hits": 0, "mrr": [], "faith": [], "correct": []}
-        categories[cat]["count"] += 1
-        categories[cat]["hits"] += 1 if r["retrieval_hit"] else 0
-        categories[cat]["mrr"].append(r["mrr"])
-        categories[cat]["faith"].append(r["faithfulness_score"])
-        categories[cat]["correct"].append(r["correctness_score"])
-
-    for cat, data in sorted(categories.items()):
-        hit_pct = data["hits"] / data["count"] * 100
-        mrr_pct = sum(data["mrr"]) / len(data["mrr"]) * 100
-        faith_avg = sum(data["faith"]) / len(data["faith"]) / 5 * 100
-        corr_avg = sum(data["correct"]) / len(data["correct"]) / 5 * 100
-        cat_table.add_row(
-            cat, str(data["count"]),
-            f"[{score_color(hit_pct)}]{hit_pct:.0f}%[/]",
-            f"[{score_color(mrr_pct)}]{mrr_pct:.0f}%[/]",
-            f"[{score_color(faith_avg)}]{faith_avg:.0f}%[/]",
-            f"[{score_color(corr_avg)}]{corr_avg:.0f}%[/]",
-        )
-
-    console.print(cat_table)
-
-    # =========================================================================
-    # SESSION 2: DIFFICULTY BREAKDOWN
-    # =========================================================================
-    console.print()
-    diff_table = Table(title="Score by Difficulty", box=box.SIMPLE, title_style="bold yellow")
-    diff_table.add_column("Difficulty", style="bold", width=12)
-    diff_table.add_column("Count", justify="center", width=7)
-    diff_table.add_column("Hit Rate", justify="center", width=9)
-    diff_table.add_column("Correctness", justify="center", width=12)
-
-    difficulties = {}
-    for r in results:
-        diff = r["difficulty"]
-        if diff not in difficulties:
-            difficulties[diff] = {"count": 0, "hits": 0, "correct": []}
-        difficulties[diff]["count"] += 1
-        difficulties[diff]["hits"] += 1 if r["retrieval_hit"] else 0
-        difficulties[diff]["correct"].append(r["correctness_score"])
-
-    diff_order = ["easy", "medium", "hard"]
-    for diff in diff_order:
-        if diff not in difficulties:
-            continue
-        data = difficulties[diff]
-        hit_pct = data["hits"] / data["count"] * 100
-        corr_avg = sum(data["correct"]) / len(data["correct"]) / 5 * 100
-        diff_color = {"easy": "green", "medium": "yellow", "hard": "red"}.get(diff, "white")
-        diff_table.add_row(
-            f"[{diff_color}]{diff}[/]",
-            str(data["count"]),
-            f"[{score_color(hit_pct)}]{hit_pct:.0f}%[/]",
-            f"[{score_color(corr_avg)}]{corr_avg:.0f}%[/]",
-        )
-
-    console.print(diff_table)
 
     # =========================================================================
     # WORST PERFORMING QUERIES
@@ -533,59 +415,11 @@ def run_eval(include_hard: bool = False, save_baseline: bool = False,
 
     console.print(f"\n[dim]Results saved → {output_path}[/]")
 
-    if attach_scores:
-        langfuse.flush()
-        console.print(f"[dim]Scores attached to {total} LangFuse traces[/]")
-
-    # =========================================================================
-    # SESSION 2: SAVE BASELINE
-    # =========================================================================
-    if save_baseline:
-        baseline_path = os.path.join(SCRIPT_DIR, "baseline_scores.json")
-
-        cat_breakdown = {}
-        for cat, data in categories.items():
-            cat_breakdown[cat] = {
-                "retrieval_hit_rate": round(data["hits"] / data["count"] * 100, 1),
-                "correctness": round(sum(data["correct"]) / len(data["correct"]) / 5 * 100, 1),
-            }
-
-        baseline = {
-            "description": "Baseline locked from current eval run.",
-            "total_queries": total,
-            "include_hard": include_hard,
-            "retrieval_hit_rate": round(hit_rate, 1),
-            "avg_faithfulness": round(faithfulness_pct, 1),
-            "avg_correctness": round(correctness_pct, 1),
-            "category_breakdown": cat_breakdown,
-        }
-
-        with open(baseline_path, "w") as f:
-            json.dump(baseline, f, indent=2)
-
-        console.print(Panel(
-            f"[bold green]Baseline saved → {baseline_path}[/]\n"
-            f"[dim]Hit Rate: {hit_rate:.1f}% | Faithfulness: {faithfulness_pct:.1f}% | Correctness: {correctness_pct:.1f}%[/]\n\n"
-            "This is now your regression anchor. Every future eval will compare against these numbers.",
-            title="[bold green]✓ Baseline Locked[/]",
-            border_style="green",
-        ))
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--include-hard", action="store_true")
-    parser.add_argument("--save-baseline", action="store_true",
-                        help="Save current scores as baseline_scores.json")
-    parser.add_argument("--no-langfuse", action="store_true",
-                        help="Skip attaching scores to LangFuse traces")
-    parser.add_argument("--category", type=str,
-                        help="Filter to a specific category prefix (e.g. 'membership', 'returns')")
+    parser.add_argument("--include-hard", action="store_true",
+                        help="Include hard queries that expose system failures")
     args = parser.parse_args()
 
-    run_eval(
-        include_hard=args.include_hard,
-        save_baseline=args.save_baseline,
-        attach_scores=not args.no_langfuse,
-        category_filter=args.category,
-    )
+    run_eval(include_hard=args.include_hard)
