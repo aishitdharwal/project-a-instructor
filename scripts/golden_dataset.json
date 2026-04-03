@@ -1,0 +1,322 @@
+[
+  {
+    "id": "q01",
+    "query": "What is the standard return window for products?",
+    "expected_answer": "The standard return window is 30 calendar days from the delivery date.",
+    "expected_source": "01_return_policy.md",
+    "difficulty": "easy",
+    "category": "returns"
+  },
+  {
+    "id": "q02",
+    "query": "Are shipping costs refundable when I return a product?",
+    "expected_answer": "Shipping costs are non-refundable unless the return is due to a defect or error on Acmera's part.",
+    "expected_source": "01_return_policy.md",
+    "difficulty": "easy",
+    "category": "returns"
+  },
+  {
+    "id": "q03",
+    "query": "How long does it take to process a refund?",
+    "expected_answer": "Refunds are processed within 5-7 business days after the returned item is received and inspected. For Premium members, it's 2 business days.",
+    "expected_source": "01_return_policy.md",
+    "difficulty": "easy",
+    "category": "returns"
+  },
+  {
+    "id": "q04",
+    "query": "What is the holiday season extended return window?",
+    "expected_answer": "Items purchased between November 15 and December 31 have an extended return window until January 31 of the following year.",
+    "expected_source": "01_return_policy.md",
+    "difficulty": "easy",
+    "category": "returns"
+  },
+  {
+    "id": "q05",
+    "query": "What items cannot be returned?",
+    "expected_answer": "Opened software, digital downloads, gift cards, perishable goods, and personalized items cannot be returned.",
+    "expected_source": "01_return_policy.md",
+    "difficulty": "easy",
+    "category": "returns"
+  },
+  {
+    "id": "q06",
+    "query": "What are the different shipping options available?",
+    "expected_answer": "Acmera offers Standard (5-7 days), Express (2-3 days), and Same-Day delivery in select metro cities.",
+    "expected_source": "03_shipping_policy.md",
+    "difficulty": "easy",
+    "category": "shipping"
+  },
+  {
+    "id": "q07",
+    "query": "How much does express shipping cost?",
+    "expected_answer": "Express shipping costs ₹199 on all orders. It's free for Premium Gold members.",
+    "expected_source": "03_shipping_policy.md",
+    "difficulty": "easy",
+    "category": "shipping"
+  },
+  {
+    "id": "q08",
+    "query": "What cities have same-day delivery?",
+    "expected_answer": "Same-day delivery is available in Mumbai, Delhi NCR, Bangalore, Hyderabad, Chennai, and Pune.",
+    "expected_source": "03_shipping_policy.md",
+    "difficulty": "easy",
+    "category": "shipping"
+  },
+  {
+    "id": "q09",
+    "query": "What should I do if my package arrives damaged?",
+    "expected_answer": "Report the damage within 48 hours of delivery with photographic evidence. Acmera will arrange a replacement or full refund at no additional cost.",
+    "expected_source": "03_shipping_policy.md",
+    "difficulty": "easy",
+    "category": "shipping"
+  },
+  {
+    "id": "q10",
+    "query": "Does Acmera ship internationally?",
+    "expected_answer": "No, Acmera currently does not offer international shipping. Customers can use third-party forwarding services at their own cost and risk.",
+    "expected_source": "03_shipping_policy.md",
+    "difficulty": "easy",
+    "category": "shipping"
+  },
+  {
+    "id": "q11",
+    "query": "What payment methods does Acmera accept?",
+    "expected_answer": "Acmera accepts credit/debit cards (Visa, Mastercard, Amex, RuPay), UPI, net banking, Acmera Wallet, EMI, and Cash on Delivery.",
+    "expected_source": "05_payment_methods.md",
+    "difficulty": "easy",
+    "category": "payments"
+  },
+  {
+    "id": "q12",
+    "query": "Is there a cash on delivery option?",
+    "expected_answer": "Yes, COD is available for orders between ₹200 and ₹25,000 with a ₹49 convenience fee. It's not available for same-day delivery or remote pin codes.",
+    "expected_source": "05_payment_methods.md",
+    "difficulty": "easy",
+    "category": "payments"
+  },
+  {
+    "id": "q13",
+    "query": "What is the maximum Acmera Wallet balance?",
+    "expected_answer": "The maximum wallet balance is ₹50,000. Minimum load amount is ₹100.",
+    "expected_source": "13_acmera_wallet.md",
+    "difficulty": "easy",
+    "category": "payments"
+  },
+  {
+    "id": "q14",
+    "query": "What warranty comes with Acmera electronics?",
+    "expected_answer": "All electronics come with a minimum 1-year manufacturer warranty covering defects in materials and workmanship under normal use.",
+    "expected_source": "04_warranty_policy.md",
+    "difficulty": "easy",
+    "category": "warranty"
+  },
+  {
+    "id": "q15",
+    "query": "What are the extended warranty options?",
+    "expected_answer": "Acmera Shield (2-year extension, 8% of product price) and Acmera Shield Plus (3-year extension with accidental damage, 12% of product price).",
+    "expected_source": "04_warranty_policy.md",
+    "difficulty": "easy",
+    "category": "warranty"
+  },
+  {
+    "id": "q16",
+    "query": "How do I track my order?",
+    "expected_answer": "Track through the Acmera app or website under 'My Orders'. You'll also receive SMS and email updates at each stage.",
+    "expected_source": "06_support_faq.md",
+    "difficulty": "easy",
+    "category": "orders"
+  },
+  {
+    "id": "q17",
+    "query": "How much does the Acmera ProBook X15 cost?",
+    "expected_answer": "The Acmera ProBook X15 costs ₹78,999.",
+    "expected_source": "09_electronics_catalog.md",
+    "difficulty": "easy",
+    "category": "products"
+  },
+  {
+    "id": "q18",
+    "query": "What is the battery life of the Acmera Pixel S24?",
+    "expected_answer": "The Acmera Pixel S24 has a 4500mAh battery.",
+    "expected_source": "09_electronics_catalog.md",
+    "difficulty": "easy",
+    "category": "products"
+  },
+  {
+    "id": "q19",
+    "query": "How do I create an Acmera account?",
+    "expected_answer": "You can create an account using email, phone number, or Google/Apple sign-in. Account creation is free.",
+    "expected_source": "10_account_management.md",
+    "difficulty": "easy",
+    "category": "account"
+  },
+  {
+    "id": "q20",
+    "query": "Can I delete my Acmera account?",
+    "expected_answer": "Yes, through Account Settings or by contacting support. Account deletion is permanent — all order history, wallet balance, and Premium status are lost.",
+    "expected_source": "10_account_management.md",
+    "difficulty": "easy",
+    "category": "account"
+  },
+  {
+    "id": "q21",
+    "query": "What is the spending threshold for Premium Silver?",
+    "expected_answer": "Premium Silver is granted after spending ₹25,000 in a calendar year or maintaining an active account for 2+ years.",
+    "expected_source": "02_premium_membership.md",
+    "difficulty": "easy",
+    "category": "membership"
+  },
+  {
+    "id": "q22",
+    "query": "What spending is needed for Premium Gold?",
+    "expected_answer": "Premium Gold requires spending ₹75,000 in a calendar year or maintaining Premium Silver for 3+ consecutive years.",
+    "expected_source": "02_premium_membership.md",
+    "difficulty": "easy",
+    "category": "membership"
+  },
+  {
+    "id": "q23",
+    "query": "Do Premium members get free shipping?",
+    "expected_answer": "Premium Silver members get free standard shipping on orders over ₹500. Premium Gold members get free express shipping on all orders regardless of value.",
+    "expected_source": "02_premium_membership.md",
+    "difficulty": "easy",
+    "category": "membership"
+  },
+  {
+    "id": "q24",
+    "query": "What is the Acmera referral program?",
+    "expected_answer": "Refer a friend and earn ₹500 wallet credit when they make their first purchase of ₹1,000+. The referred customer gets ₹300 off their first order.",
+    "expected_source": "16_referral_program.md",
+    "difficulty": "easy",
+    "category": "rewards"
+  },
+  {
+    "id": "q25",
+    "query": "What smart home devices does Acmera sell?",
+    "expected_answer": "Acmera sells the SmartHome Hub Pro (₹8,999), SmartHome Camera 360 (₹3,999), and integrates with Google Home, Alexa, and partially with Apple HomeKit.",
+    "expected_source": "09_electronics_catalog.md",
+    "difficulty": "easy",
+    "category": "products"
+  },
+  {
+    "id": "q26",
+    "query": "Is the SmartHome Hub Pro compatible with Apple HomeKit?",
+    "expected_answer": "The SmartHome Hub Pro is not currently HomeKit compatible, but compatibility is planned for Q2 2026. The SmartHome Camera 360 is HomeKit compatible.",
+    "expected_source": "17_smart_home_ecosystem.md",
+    "difficulty": "medium",
+    "category": "products"
+  },
+  {
+    "id": "q27",
+    "query": "What is Acmera's trade-in program?",
+    "expected_answer": "Customers can trade in old devices for wallet credit: laptops up to ₹25,000, smartphones up to ₹10,000, smart home devices up to ₹2,000.",
+    "expected_source": "18_sustainability.md",
+    "difficulty": "easy",
+    "category": "sustainability"
+  },
+  {
+    "id": "q28",
+    "query": "What are the cloud storage plans for the SmartHome Camera?",
+    "expected_answer": "Free (live view only), Basic (₹99/month, 7-day history), Premium (₹199/month, 30-day history with person detection). 3-camera bundle available at ₹449/month.",
+    "expected_source": "17_smart_home_ecosystem.md",
+    "difficulty": "easy",
+    "category": "products"
+  },
+  {
+    "id": "q29",
+    "query": "What is the minimum order for corporate bulk pricing?",
+    "expected_answer": "Orders of 10+ units qualify for bulk pricing: 10-49 units get 10% off, 50-99 get 15% off, 100+ get 20% off plus free express shipping.",
+    "expected_source": "12_corporate_gifting.md",
+    "difficulty": "easy",
+    "category": "business"
+  },
+  {
+    "id": "q30",
+    "query": "Can I change my delivery address after ordering?",
+    "expected_answer": "Address changes are only possible if the order hasn't been shipped yet. Contact support immediately with your order number. Once shipped, the address cannot be changed.",
+    "expected_source": "06_support_faq.md",
+    "difficulty": "easy",
+    "category": "orders"
+  },
+  {
+    "id": "q31",
+    "query": "Does my wallet balance expire?",
+    "expected_answer": "Regular wallet balance doesn't expire as long as your account is active. After 18 months of inactivity, the balance is forfeited. Promotional wallet credits expire after 90 days.",
+    "expected_source": "13_acmera_wallet.md",
+    "difficulty": "medium",
+    "category": "payments"
+  },
+  {
+    "id": "q32",
+    "query": "What is the dead pixel policy for laptops?",
+    "expected_answer": "Acmera allows warranty claims for 5 or more dead pixels, or 1 or more dead pixels in the center third of the display.",
+    "expected_source": "14_probook_troubleshooting.md",
+    "difficulty": "medium",
+    "category": "warranty"
+  },
+  {
+    "id": "q33",
+    "query": "How do I request a data export of my account?",
+    "expected_answer": "Request a data export through Account Settings or by contacting support. Export requests are fulfilled within 30 days.",
+    "expected_source": "10_account_management.md",
+    "difficulty": "easy",
+    "category": "account"
+  },
+  {
+    "id": "q34",
+    "query": "What types of promotional events does Acmera run?",
+    "expected_answer": "Acmera runs seasonal sales (Diwali, Republic Day, Independence Day, Year-End), flash sales (6-24 hours), clearance events (quarterly), and Premium-exclusive sales.",
+    "expected_source": "07_promotional_events.md",
+    "difficulty": "easy",
+    "category": "promotions"
+  },
+  {
+    "id": "q35",
+    "query": "What is the return window for items bought during a promotional sale?",
+    "expected_answer": "Promotional items have a reduced 15-day return window and a 10% restocking fee. Items marked 'Final Sale' cannot be returned at all.",
+    "expected_source": "07_promotional_events.md",
+    "difficulty": "medium",
+    "category": "returns"
+  },
+  {
+    "id": "q36",
+    "query": "What EMI options are available?",
+    "expected_answer": "No-cost EMI on select products for orders above ₹5,000. Available on HDFC, ICICI, SBI, Axis, and Kotak credit cards. Tenure: 3, 6, 9, or 12 months.",
+    "expected_source": "05_payment_methods.md",
+    "difficulty": "easy",
+    "category": "payments"
+  },
+  {
+    "id": "q37",
+    "query": "What is the warranty claim process?",
+    "expected_answer": "Contact support → remote diagnosis → prepaid shipping label → repair or replacement in 7-14 business days after receiving the item.",
+    "expected_source": "04_warranty_policy.md",
+    "difficulty": "easy",
+    "category": "warranty"
+  },
+  {
+    "id": "q38",
+    "query": "Do Premium members get early access to sales?",
+    "expected_answer": "Yes, Premium members get 48-hour early access to seasonal sales and new product launches. Flash sales are accessible 24 hours early. Premium Gold also gets quarterly 15% discount codes.",
+    "expected_source": "02_premium_membership.md",
+    "difficulty": "easy",
+    "category": "membership"
+  },
+  {
+    "id": "q39",
+    "query": "What happens to my Premium status if I don't meet the spending threshold?",
+    "expected_answer": "You'll be notified 30 days before downgrade, with a 90-day grace period where you keep current tier benefits. Additional spending during this time counts toward reinstating your tier.",
+    "expected_source": "06_support_faq.md",
+    "difficulty": "medium",
+    "category": "membership"
+  },
+  {
+    "id": "q40",
+    "query": "Can corporate orders be customized with a company logo?",
+    "expected_answer": "Yes, for orders of 50+ units. Options include laser engraving on electronics, custom packaging, and personalized greeting cards. Adds 7-10 business days. Customized items are not returnable.",
+    "expected_source": "12_corporate_gifting.md",
+    "difficulty": "easy",
+    "category": "business"
+  }
+]

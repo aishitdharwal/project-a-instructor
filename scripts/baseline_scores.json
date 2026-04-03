@@ -1,0 +1,23 @@
+{
+  "description": "Baseline scores from Session 1 eval — easy/medium queries only (40 queries). This is the anchor for regression detection.",
+  "session": "Session 1",
+  "total_queries": 40,
+  "include_hard": false,
+  "retrieval_hit_rate": 97.5,
+  "avg_faithfulness": 96.0,
+  "avg_correctness": 85.0,
+  "category_breakdown": {
+    "returns": {"retrieval_hit_rate": 100.0, "correctness": 80.0},
+    "shipping": {"retrieval_hit_rate": 100.0, "correctness": 94.0},
+    "payments": {"retrieval_hit_rate": 100.0, "correctness": 86.0},
+    "warranty": {"retrieval_hit_rate": 100.0, "correctness": 85.0},
+    "membership": {"retrieval_hit_rate": 100.0, "correctness": 90.0},
+    "orders": {"retrieval_hit_rate": 100.0, "correctness": 100.0},
+    "products": {"retrieval_hit_rate": 80.0, "correctness": 72.0},
+    "account": {"retrieval_hit_rate": 100.0, "correctness": 95.0},
+    "rewards": {"retrieval_hit_rate": 100.0, "correctness": 80.0},
+    "promotions": {"retrieval_hit_rate": 100.0, "correctness": 75.0},
+    "sustainability": {"retrieval_hit_rate": 100.0, "correctness": 100.0},
+    "business": {"retrieval_hit_rate": 100.0, "correctness": 90.0}
+  }
+}
