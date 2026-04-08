@@ -1,31 +1,34 @@
 """
-Step 2: Ingest documents into pgvector.
+Ingest documents into pgvector — instructor version.
 
-DELIBERATELY NAIVE chunking to create realistic production failures:
-- Fixed-size character splitting (no semantic awareness)
-- No overlap between chunks
-- No document-type-specific handling
-- Markdown headers get split from their content
+Session 3: supports multiple chunking strategies.
+A/B test them against each other using the eval harness.
 
-This is how most tutorials teach RAG. It works on clean data.
-It breaks on real documents.
-
-Run: python scripts/ingest.py
+Run:
+    python -m scripts.ingest                           # fixed_size (Week 1 default)
+    python -m scripts.ingest --strategy sentence_aware
+    python -m scripts.ingest --strategy sliding_window
+    python -m scripts.ingest --compare               # show chunk stats for all strategies
 """
 import os
 import glob
 import json
+import argparse
 from openai import OpenAI
 import psycopg2
 from pgvector.psycopg2 import register_vector
 from dotenv import load_dotenv
+from rich.console import Console
+from rich.table import Table
+from rich import box
+
+from scripts.chunker import chunk_document, compare_strategies, STRATEGIES
 
 load_dotenv()
 
 client = OpenAI()
+console = Console()
 
-CHUNK_SIZE = 500  # Characters — deliberately small to create splits
-CHUNK_OVERLAP = 0  # No overlap — makes boundary problems worse
 CORPUS_DIR = os.path.join(os.path.dirname(__file__), "..", "corpus")
 
 
@@ -41,39 +44,15 @@ def get_connection():
     return conn
 
 
-def naive_chunk(text: str, chunk_size: int = CHUNK_SIZE) -> list[str]:
-    """
-    Fixed-size character splitting with no overlap.
-    This is the 'tutorial-grade' chunking that breaks in production.
-    
-    Problems this creates:
-    - Splits mid-sentence
-    - Separates headers from their content
-    - Breaks multi-part policies across chunks
-    - No metadata about which section a chunk belongs to
-    """
-    chunks = []
-    for i in range(0, len(text), chunk_size):
-        chunk = text[i : i + chunk_size].strip()
-        if chunk:
-            chunks.append(chunk)
-    return chunks
-
-
-def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of texts using OpenAI text-embedding-3-small."""
-    response = client.embeddings.create(
-        model="text-embedding-3-small",
-        input=texts,
-    )
+def embed_texts(texts):
+    response = client.embeddings.create(model="text-embedding-3-small", input=texts)
     return [item.embedding for item in response.data]
 
 
-def ingest():
+def ingest(strategy="fixed_size"):
+    console.print(f"\n[bold cyan]Ingesting corpus[/] with strategy: [bold yellow]{strategy}[/]\n")
     conn = get_connection()
     cur = conn.cursor()
-
-    # Clear existing data
     cur.execute("DELETE FROM chunks;")
 
     doc_files = sorted(glob.glob(os.path.join(CORPUS_DIR, "*.md")))
@@ -84,12 +63,11 @@ def ingest():
         with open(filepath, "r") as f:
             content = f.read()
 
-        chunks = naive_chunk(content)
-        print(f"  {doc_name}: {len(chunks)} chunks")
+        chunks = chunk_document(content, strategy=strategy)
+        console.print(f"  [dim]{doc_name}[/]: [green]{len(chunks)}[/] chunks")
 
-        # Embed in batches of 20
         for batch_start in range(0, len(chunks), 20):
-            batch = chunks[batch_start : batch_start + 20]
+            batch = chunks[batch_start:batch_start + 20]
             embeddings = embed_texts(batch)
 
             for i, (chunk, embedding) in enumerate(zip(batch, embeddings)):
@@ -97,8 +75,7 @@ def ingest():
                 metadata = json.dumps({
                     "doc_name": doc_name,
                     "chunk_index": chunk_index,
-                    "char_start": chunk_index * CHUNK_SIZE,
-                    "char_end": chunk_index * CHUNK_SIZE + len(chunk),
+                    "strategy": strategy,
                 })
                 cur.execute(
                     """INSERT INTO chunks (doc_name, chunk_index, content, embedding, metadata)
@@ -111,11 +88,48 @@ def ingest():
     conn.commit()
     cur.close()
     conn.close()
+    console.print(
+        f"\n[bold green]Done:[/] {len(doc_files)} documents, {total_chunks} chunks "
+        f"(strategy: [yellow]{strategy}[/])"
+    )
 
-    print(f"\nIngestion complete: {len(doc_files)} documents, {total_chunks} chunks.")
-    print(f"Chunk size: {CHUNK_SIZE} chars, overlap: {CHUNK_OVERLAP} chars")
-    print("WARNING: Using naive fixed-size chunking. This WILL create retrieval failures.")
+
+def show_comparison():
+    doc_files = sorted(glob.glob(os.path.join(CORPUS_DIR, "*.md")))
+    totals = {s: {"count": 0, "chars": 0} for s in STRATEGIES}
+
+    for filepath in doc_files:
+        with open(filepath) as f:
+            text = f.read()
+        stats = compare_strategies(text)
+        for strategy, s in stats.items():
+            totals[strategy]["count"] += s["count"]
+            totals[strategy]["chars"] += s["count"] * s["avg_size"]
+
+    table = Table(
+        title="Chunking Strategy Comparison (full corpus)",
+        box=box.ROUNDED, title_style="bold cyan",
+    )
+    table.add_column("Strategy", style="bold", width=20)
+    table.add_column("Total Chunks", justify="center")
+    table.add_column("Avg Chars", justify="center")
+    table.add_column("Note", style="dim")
+
+    for strategy, data in totals.items():
+        avg = data["chars"] // data["count"] if data["count"] else 0
+        note = "← Week 1 baseline" if strategy == "fixed_size" else ""
+        table.add_row(strategy, str(data["count"]), str(avg), note)
+
+    console.print(table)
 
 
 if __name__ == "__main__":
-    ingest()
+    parser = argparse.ArgumentParser(description="Ingest corpus into pgvector")
+    parser.add_argument("--strategy", choices=list(STRATEGIES), default="fixed_size")
+    parser.add_argument("--compare", action="store_true")
+    args = parser.parse_args()
+
+    if args.compare:
+        show_comparison()
+    else:
+        ingest(strategy=args.strategy)
