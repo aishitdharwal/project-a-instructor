@@ -1,0 +1,252 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Acmera Project A — ECS Service Stack (RAG Pipeline).
+  Imports shared infrastructure from the base stack and deploys:
+    Application Load Balancer (internet-facing, HTTP port 80)
+    ECS Fargate service running the FastAPI RAG app (port 8000)
+    Auto-scaling policy (CPU-based, 1–3 tasks)
+
+  Prerequisites: base stack must be deployed first.
+
+Parameters:
+
+  ImageUri:
+    Type: String
+    Description: >
+      Full ECR image URI including tag.
+      Example: 123456789.dkr.ecr.ap-south-1.amazonaws.com/acmera-project-a:latest
+      deploy.sh fills this in automatically.
+
+  DesiredCount:
+    Type: Number
+    Default: 1
+    Description: Initial number of ECS tasks to run.
+
+  TaskCpu:
+    Type: String
+    Default: '1024'
+    Description: vCPU units for the Fargate task (1024 = 1 vCPU).
+
+  TaskMemory:
+    Type: String
+    Default: '2048'
+    Description: Memory in MB for the Fargate task.
+
+# ─────────────────────────────────────────────────────────────────────────────
+Resources:
+# ─────────────────────────────────────────────────────────────────────────────
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # APPLICATION LOAD BALANCER
+  # Internet-facing ALB in the public subnets.
+  # Routes all traffic on port 80 → ECS tasks on port 8000.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: acmera-project-a-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !ImportValue AcmeraPublicSubnet1Id
+        - !ImportValue AcmeraPublicSubnet2Id
+      SecurityGroups:
+        - !ImportValue AcmeraALBSecurityGroupId
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: acmera-project-a-tg
+      Protocol: HTTP
+      Port: 8000
+      TargetType: ip           # required for Fargate awsvpc networking
+      VpcId: !ImportValue AcmeraVPCId
+      HealthCheckPath: /health # FastAPI endpoint defined in app.py
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'          # shorter deregistration for faster deploys
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ECS TASK DEFINITION
+  # Declares the container spec: image, CPU, memory, env vars, secrets, logs.
+  #
+  # Secrets injection pattern (important for students to understand):
+  #   ValueFrom: ARN:field::  → pulls a specific JSON key from Secrets Manager
+  #   The ECS agent fetches secrets at task startup before the container runs.
+  #   The app sees them as plain environment variables — no AWS SDK calls needed.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: acmera-project-a
+      Cpu: !Ref TaskCpu
+      Memory: !Ref TaskMemory
+      NetworkMode: awsvpc       # required for Fargate; each task gets its own ENI
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !ImportValue AcmeraTaskExecutionRoleArn
+      TaskRoleArn: !ImportValue AcmeraTaskRoleArn
+      ContainerDefinitions:
+        - Name: project-a
+          Image: !Ref ImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8000
+              Protocol: tcp
+
+          # ── Plain environment variables (not sensitive) ────────────────
+          Environment:
+            - Name: PG_HOST
+              Value: !ImportValue AcmeraAuroraEndpoint
+            - Name: PG_PORT
+              Value: !ImportValue AcmeraAuroraPort
+            - Name: PG_USER
+              Value: !ImportValue AcmeraAuroraUsername
+            - Name: PG_DATABASE
+              Value: !ImportValue AcmeraAuroraDBName
+            - Name: REDIS_URL
+              Value: !Sub
+                - redis://${Host}:${Port}
+                - Host: !ImportValue AcmeraRedisEndpoint
+                  Port: !ImportValue AcmeraRedisPort
+            - Name: LANGFUSE_HOST
+              Value: https://cloud.langfuse.com
+
+          # ── Secrets injected from Secrets Manager at task startup ──────
+          # Format: ValueFrom: <secret-ARN-or-name>:<json-key>::
+          Secrets:
+            # Aurora password extracted from AWS-managed secret JSON {"password":"..."}
+            - Name: PG_PASSWORD
+              ValueFrom: !Sub
+                - ${SecretArn}:password::
+                - SecretArn: !ImportValue AcmeraAuroraSecretArn
+            # API keys stored by deploy.sh in /acmera/* path
+            - Name: OPENAI_API_KEY
+              ValueFrom: /acmera/openai-api-key
+            - Name: COHERE_API_KEY
+              ValueFrom: /acmera/cohere-api-key
+            - Name: LANGFUSE_PUBLIC_KEY
+              ValueFrom: /acmera/langfuse-public-key
+            - Name: LANGFUSE_SECRET_KEY
+              ValueFrom: /acmera/langfuse-secret-key
+
+          # ── CloudWatch Logs ────────────────────────────────────────────
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !ImportValue AcmeraProjectALogGroup
+              awslogs-region: ap-south-1
+              awslogs-stream-prefix: ecs
+
+          # ── Health check (double-checked by ECS in addition to ALB) ───
+          HealthCheck:
+            Command: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 15
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ECS SERVICE
+  # Keeps the desired number of tasks running.
+  # DependsOn Listener: ECS won't start tasks until the ALB is ready.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: Listener
+    Properties:
+      ServiceName: acmera-project-a-service
+      Cluster: !ImportValue AcmeraECSClusterArn
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets:
+            - !ImportValue AcmeraPrivateSubnet1Id
+            - !ImportValue AcmeraPrivateSubnet2Id
+          SecurityGroups:
+            - !ImportValue AcmeraECSSecurityGroupId
+          AssignPublicIp: DISABLED   # tasks are in private subnets
+      LoadBalancers:
+        - TargetGroupArn: !Ref TargetGroup
+          ContainerName: project-a
+          ContainerPort: 8000
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      # Enable ECS Circuit Breaker: auto-rollback on deployment failures
+      DeploymentController:
+        Type: ECS
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # AUTO-SCALING
+  # Scales between 1 and 3 tasks based on CPU utilisation.
+  # Scale-out at 70% CPU, scale-in at 30% (15min cooldown to avoid flapping).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  AutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: 1
+      MaxCapacity: 3
+      ResourceId: !Sub service/${AcmeraECSClusterName}/${ECSService.Name}
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+
+  ScaleOutPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: acmera-project-a-scale-out
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: 70.0
+        ScaleInCooldown: 900    # 15 minutes — prevents scaling down too fast
+        ScaleOutCooldown: 120
+
+# ─────────────────────────────────────────────────────────────────────────────
+Outputs:
+# ─────────────────────────────────────────────────────────────────────────────
+
+  ServiceURL:
+    Description: Project A public URL (ALB DNS name)
+    Value: !Sub http://${ALB.DNSName}
+    Export:
+      Name: AcmeraProjectAServiceURL
+
+  ALBDNSName:
+    Value: !GetAtt ALB.DNSName
+    Export:
+      Name: AcmeraProjectAALBDNS
+
+  ECSServiceName:
+    Value: !GetAtt ECSService.Name
+    Export:
+      Name: AcmeraProjectAECSServiceName
+
+  TaskDefinitionArn:
+    Description: Used by deploy.sh to run one-off setup/ingest tasks
+    Value: !Ref TaskDefinition
+    Export:
+      Name: AcmeraProjectATaskDefinitionArn

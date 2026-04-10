@@ -8,3 +8,6 @@ rank_bm25
 cohere
 ragas
 datasets
+fastapi
+uvicorn[standard]
+redis

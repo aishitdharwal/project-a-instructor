@@ -200,7 +200,7 @@ def generate(query, context, model: str = None):
 
 
 @observe(name="rag_pipeline")
-def ask(query, mode="dense", use_cache: bool = False):
+def ask(query, mode="dense", use_cache: bool = False, cache=None):
     """
     Run the RAG pipeline.
 
@@ -208,6 +208,9 @@ def ask(query, mode="dense", use_cache: bool = False):
     use_cache: if True, check semantic cache before retrieval.
                On a hit, skips embedding → retrieval → generation entirely.
                On a miss, runs the pipeline and stores the result.
+    cache:     optional SemanticCache instance. If None and use_cache=True,
+               falls back to the module-level in-memory singleton.
+               Pass a Redis-backed SemanticCache from app.py for production.
     """
     start_time = time.time()
     langfuse_context.update_current_trace(
@@ -218,9 +221,11 @@ def ask(query, mode="dense", use_cache: bool = False):
     query_embedding = embed_query(query)
 
     # ── Session 5: semantic cache check ──────────────────────────────────────
+    # cache param: pass a SemanticCache instance from the caller (e.g. app.py
+    # passes a Redis-backed instance). Falls back to in-memory singleton.
     if use_cache:
-        cache = get_cache()
-        cache_hit, cached_answer = cache.check(query_embedding)
+        _cache = cache if cache is not None else get_cache()
+        cache_hit, cached_answer = _cache.check(query_embedding)
         if cache_hit:
             elapsed = round(time.time() - start_time, 2)
             langfuse_context.update_current_trace(
@@ -264,7 +269,8 @@ def ask(query, mode="dense", use_cache: bool = False):
 
     # Store in cache after pipeline runs (on miss)
     if use_cache:
-        cache.store(query_embedding, query, result["answer"])
+        _cache = cache if cache is not None else get_cache()
+        _cache.store(query_embedding, query, result["answer"])
 
     return result
 

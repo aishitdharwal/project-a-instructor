@@ -1,0 +1,581 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Acmera AI Classroom — Base Infrastructure Stack.
+  Creates all shared resources used by both Project A (RAG) and Project B (Agent):
+    VPC, subnets, NAT Gateway, security groups,
+    Aurora PostgreSQL Serverless v2 (pgvector),
+    ElastiCache Redis,
+    ECS Cluster, ECR repositories, IAM roles, CloudWatch log groups.
+
+  Deploy this once. Both service stacks (service-a, service-b) import its outputs.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: acmera
+    Description: Prefix used for all resource names and export keys.
+
+  DBName:
+    Type: String
+    Default: acmera_kb
+    Description: Aurora database name.
+
+  DBUsername:
+    Type: String
+    Default: workshop
+    Description: Aurora master username.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESOURCES
+# ─────────────────────────────────────────────────────────────────────────────
+Resources:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # NETWORKING
+  # VPC with 2 public + 2 private subnets across ap-south-1a and ap-south-1b.
+  # Public subnets hold the ALB and NAT Gateway.
+  # Private subnets hold ECS tasks, Aurora, and ElastiCache (never internet-facing).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true   # required for ECS task → RDS hostname resolution
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-igw
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # ── Public subnets (ALB + NAT Gateway) ────────────────────────────────────
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: ap-south-1a
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-1a
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: ap-south-1b
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-public-1b
+
+  # ── Private subnets (ECS tasks, Aurora, Redis) ───────────────────────────
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.10.0/24
+      AvailabilityZone: ap-south-1a
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-1a
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.11.0/24
+      AvailabilityZone: ap-south-1b
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-private-1b
+
+  # ── NAT Gateway (one, in public subnet 1) ─────────────────────────────────
+  # Note: production would have one per AZ for high availability.
+  # Single NAT is fine for a showcase — saves cost.
+  NATGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-nat
+
+  # ── Route tables ──────────────────────────────────────────────────────────
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-rt-public
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-rt-private
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway   # private → NAT → internet (for OpenAI/Cohere calls)
+
+  PrivateSubnet1RTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RTA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # SECURITY GROUPS
+  # Principle of least privilege: each tier only accepts traffic from the tier
+  # directly above it in the stack.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  # ALB: accepts HTTP from the internet
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP inbound to ALB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-sg-alb
+
+  # ECS tasks: only accept traffic from the ALB
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic from ALB to ECS tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-sg-ecs
+
+  # Aurora: only accept connections from ECS tasks
+  AuroraSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow PostgreSQL from ECS tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-sg-aurora
+
+  # Redis: only accept connections from ECS tasks
+  RedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Redis from ECS tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-sg-redis
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # AURORA POSTGRESQL (Serverless v2)
+  # Engine: aurora-postgresql 17.7
+  # Serverless v2 scales between 0.5 and 4 ACUs automatically.
+  # AWS manages the master password in Secrets Manager.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  AuroraSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Aurora subnet group for Acmera
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-aurora-subnet-group
+
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Delete    # convenient for showcase — drop everything on teardown
+    Properties:
+      DBClusterIdentifier: !Sub ${EnvironmentName}-aurora-cluster
+      Engine: aurora-postgresql
+      EngineVersion: '17.7'
+      DatabaseName: !Ref DBName
+      MasterUsername: !Ref DBUsername
+      # AWS generates a random password and stores it in Secrets Manager automatically.
+      # The secret ARN is exported below so ECS tasks can inject it as PG_PASSWORD.
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref AuroraSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref AuroraSecurityGroup
+      StorageEncrypted: true
+      # Serverless v2 scaling: scales down to 0.5 ACU when idle, up to 4 under load
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 0.5
+        MaxCapacity: 4
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-aurora-cluster
+
+  # Serverless v2 requires at least one db.serverless instance in the cluster
+  AuroraInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceIdentifier: !Sub ${EnvironmentName}-aurora-instance
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      PubliclyAccessible: false   # always keep DB in private subnet
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ELASTICACHE REDIS
+  # Single-node Redis 7.x for semantic cache.
+  # cache.t3.micro is the smallest available — enough for a showcase.
+  # Sits in private subnets; no auth token (protected by security group).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: ElastiCache subnet group for Acmera Redis
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  RedisReplicationGroup:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: !Sub ${EnvironmentName}-redis
+      ReplicationGroupDescription: Acmera semantic cache
+      NumCacheClusters: 1          # single node — no replication for showcase
+      CacheNodeType: cache.t3.micro
+      Engine: redis
+      EngineVersion: '7.1'
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      SecurityGroupIds:
+        - !Ref RedisSecurityGroup
+      AtRestEncryptionEnabled: true
+      # TransitEncryptionEnabled off for simplicity (private subnet = network isolation)
+      AutoMinorVersionUpgrade: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-redis
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ECS CLUSTER
+  # Fargate-only cluster — no EC2 instances to manage.
+  # Container Insights enabled for CloudWatch metrics on CPU/memory per task.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${EnvironmentName}-cluster
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # ECR REPOSITORIES
+  # One per project. deploy.sh builds and pushes images here.
+  # Image scanning on push catches known vulnerabilities automatically.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  ECRRepoProjectA:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Delete
+    Properties:
+      RepositoryName: !Sub ${EnvironmentName}-project-a
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Keep last 5 images",
+              "selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 5},
+              "action": {"type": "expire"}
+            }]
+          }
+
+  ECRRepoProjectB:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Delete
+    Properties:
+      RepositoryName: !Sub ${EnvironmentName}-project-b
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Keep last 5 images",
+              "selection": {"tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 5},
+              "action": {"type": "expire"}
+            }]
+          }
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # IAM ROLES
+  #
+  # TaskExecutionRole — used by ECS agent (not your app code) to:
+  #   • Pull the Docker image from ECR
+  #   • Send logs to CloudWatch
+  #   • Read secrets from Secrets Manager at task startup
+  #
+  # TaskRole — used by your app code running inside the container.
+  #   Currently no AWS SDK calls from app code, so minimal permissions.
+  #   Extend this if app code needs to call S3, DynamoDB, etc.
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-ecs-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Covers ECR pull + CloudWatch Logs write
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SecretsManagerReadPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Allow reading all /acmera/* secrets (API keys stored by deploy.sh)
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/acmera/*
+              # Allow reading Aurora managed password secret
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:rds!*
+
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-ecs-task-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      # No extra permissions needed — app talks to OpenAI/Cohere/LangFuse externally,
+      # and to Aurora/Redis inside the VPC. Extend here for any future AWS SDK calls.
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # CLOUDWATCH LOG GROUPS
+  # Separate log group per project. Logs retained 7 days (enough for showcase).
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  ProjectALogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/acmera-project-a
+      RetentionInDays: 7
+
+  ProjectBLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/acmera-project-b
+      RetentionInDays: 7
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OUTPUTS — exported so service stacks can import them with Fn::ImportValue
+# ─────────────────────────────────────────────────────────────────────────────
+Outputs:
+
+  VPCId:
+    Value: !Ref VPC
+    Export:
+      Name: AcmeraVPCId
+
+  PublicSubnet1Id:
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: AcmeraPublicSubnet1Id
+
+  PublicSubnet2Id:
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: AcmeraPublicSubnet2Id
+
+  PrivateSubnet1Id:
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: AcmeraPrivateSubnet1Id
+
+  PrivateSubnet2Id:
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: AcmeraPrivateSubnet2Id
+
+  ALBSecurityGroupId:
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: AcmeraALBSecurityGroupId
+
+  ECSSecurityGroupId:
+    Value: !Ref ECSSecurityGroup
+    Export:
+      Name: AcmeraECSSecurityGroupId
+
+  ECSClusterName:
+    Value: !Ref ECSCluster
+    Export:
+      Name: AcmeraECSClusterName
+
+  ECSClusterArn:
+    Value: !GetAtt ECSCluster.Arn
+    Export:
+      Name: AcmeraECSClusterArn
+
+  TaskExecutionRoleArn:
+    Value: !GetAtt ECSTaskExecutionRole.Arn
+    Export:
+      Name: AcmeraTaskExecutionRoleArn
+
+  TaskRoleArn:
+    Value: !GetAtt ECSTaskRole.Arn
+    Export:
+      Name: AcmeraTaskRoleArn
+
+  AuroraEndpoint:
+    Value: !GetAtt AuroraCluster.Endpoint.Address
+    Export:
+      Name: AcmeraAuroraEndpoint
+
+  AuroraPort:
+    Value: !GetAtt AuroraCluster.Endpoint.Port
+    Export:
+      Name: AcmeraAuroraPort
+
+  AuroraSecretArn:
+    Description: ARN of the Secrets Manager secret containing the Aurora master password
+    Value: !GetAtt AuroraCluster.MasterUserSecret.SecretArn
+    Export:
+      Name: AcmeraAuroraSecretArn
+
+  AuroraDBName:
+    Value: !Ref DBName
+    Export:
+      Name: AcmeraAuroraDBName
+
+  AuroraUsername:
+    Value: !Ref DBUsername
+    Export:
+      Name: AcmeraAuroraUsername
+
+  RedisEndpoint:
+    Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Address
+    Export:
+      Name: AcmeraRedisEndpoint
+
+  RedisPort:
+    Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Port
+    Export:
+      Name: AcmeraRedisPort
+
+  ECRProjectAUri:
+    Value: !GetAtt ECRRepoProjectA.RepositoryUri
+    Export:
+      Name: AcmeraECRProjectAUri
+
+  ECRProjectBUri:
+    Value: !GetAtt ECRRepoProjectB.RepositoryUri
+    Export:
+      Name: AcmeraECRProjectBUri
+
+  ProjectALogGroup:
+    Value: !Ref ProjectALogGroup
+    Export:
+      Name: AcmeraProjectALogGroup
+
+  ProjectBLogGroup:
+    Value: !Ref ProjectBLogGroup
+    Export:
+      Name: AcmeraProjectBLogGroup
