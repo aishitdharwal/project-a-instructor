@@ -4,5 +4,7 @@ psycopg2-binary
 pgvector
 python-dotenv
 rich
+rank_bm25
+cohere
 ragas
 datasets

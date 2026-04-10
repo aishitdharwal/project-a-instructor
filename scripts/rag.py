@@ -1,15 +1,22 @@
 """
-RAG pipeline — Instructor version, Session 4 complete.
+RAG pipeline — Instructor version, Session 5 complete.
 
 Full pipeline progression (all modes supported):
   dense    — Week 1 baseline (pure vector similarity)
   hybrid   — Session 3: BM25 + dense + RRF fusion
   advanced — Session 4: hybrid + Cohere rerank + context engineering
+  cached   — Session 5: semantic cache check before advanced pipeline
+
+Session 5 additions:
+  - model_router: routes each query to gpt-4o-mini (simple) or gpt-4o (complex)
+  - semantic_cache: skips retrieval + generation on cache hit
+  - result dict now includes cache_hit and model_used fields
 
 Run:
     python -m scripts.rag                              # dense
     python -m scripts.rag --mode hybrid               # Session 3
     python -m scripts.rag --mode advanced             # Session 4
+    python -m scripts.rag --mode advanced --cache     # Session 5: with cache
 """
 import os
 import json
@@ -26,6 +33,9 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 
+from scripts.model_router import route_model
+from scripts.semantic_cache import get_cache
+
 load_dotenv()
 
 client = OpenAI()
@@ -34,7 +44,7 @@ console = Console()
 
 TOP_K = 5
 BM25_CANDIDATES = TOP_K * 3
-GENERATION_MODEL = "gpt-4o-mini"
+GENERATION_MODEL = "gpt-4o-mini"  # fallback; route_model() overrides per query
 
 SYSTEM_PROMPT = """You are a helpful customer support assistant for Acmera, an Indian e-commerce company.
 Answer the customer's question based on the provided context from our documentation.
@@ -162,52 +172,101 @@ def assemble_context(retrieved_chunks):
 
 
 @observe(name="generation")
-def generate(query, context):
+def generate(query, context, model: str = None):
+    """
+    Generate an answer. If model is not specified, route_model() picks
+    gpt-4o-mini for simple queries and gpt-4o for complex ones.
+    """
+    if model is None:
+        model = route_model(query)
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT.format(context=context)},
         {"role": "user", "content": query},
     ]
     response = client.chat.completions.create(
-        model=GENERATION_MODEL, messages=messages, temperature=0, max_tokens=1000,
+        model=model, messages=messages, temperature=0, max_tokens=1000,
     )
     answer = response.choices[0].message.content
     langfuse_context.update_current_observation(
         input=messages, output=answer,
-        metadata={"model": GENERATION_MODEL,
+        metadata={"model": model,
                   "prompt_tokens": response.usage.prompt_tokens,
                   "completion_tokens": response.usage.completion_tokens},
         usage={"input": response.usage.prompt_tokens, "output": response.usage.completion_tokens,
                "total": response.usage.total_tokens, "unit": "TOKENS"},
     )
-    return answer
+    return answer, model
 
 
 @observe(name="rag_pipeline")
-def ask(query, mode="dense"):
+def ask(query, mode="dense", use_cache: bool = False):
+    """
+    Run the RAG pipeline.
+
+    mode:      "dense" | "hybrid" | "advanced"
+    use_cache: if True, check semantic cache before retrieval.
+               On a hit, skips embedding → retrieval → generation entirely.
+               On a miss, runs the pipeline and stores the result.
+    """
     start_time = time.time()
-    langfuse_context.update_current_trace(input=query, metadata={"pipeline": f"rag_{mode}"})
+    langfuse_context.update_current_trace(
+        input=query,
+        metadata={"pipeline": f"rag_{mode}", "cache_enabled": use_cache},
+    )
 
     query_embedding = embed_query(query)
 
+    # ── Session 5: semantic cache check ──────────────────────────────────────
+    if use_cache:
+        cache = get_cache()
+        cache_hit, cached_answer = cache.check(query_embedding)
+        if cache_hit:
+            elapsed = round(time.time() - start_time, 2)
+            langfuse_context.update_current_trace(
+                output=cached_answer,
+                metadata={"elapsed_seconds": elapsed, "cache_hit": True},
+            )
+            langfuse.flush()
+            return {
+                "query": query, "answer": cached_answer,
+                "retrieved_chunks": [], "context": "",
+                "trace_id": langfuse_context.get_current_trace_id(),
+                "elapsed_seconds": elapsed, "mode": mode,
+                "cache_hit": True, "model_used": "cached",
+            }
+    # ─────────────────────────────────────────────────────────────────────────
+
     if mode == "advanced":
-        return _ask_advanced(query, query_embedding, start_time)
-    elif mode == "hybrid":
-        retrieved_chunks = hybrid_retrieve(query, query_embedding)
+        result = _ask_advanced(query, query_embedding, start_time)
     else:
-        retrieved_chunks = retrieve(query_embedding)
+        if mode == "hybrid":
+            retrieved_chunks = hybrid_retrieve(query, query_embedding)
+        else:
+            retrieved_chunks = retrieve(query_embedding)
 
-    context = assemble_context(retrieved_chunks)
-    answer = generate(query, context)
+        context = assemble_context(retrieved_chunks)
+        answer, model_used = generate(query, context)
 
-    elapsed = round(time.time() - start_time, 2)
-    langfuse_context.update_current_trace(output=answer, metadata={"elapsed_seconds": elapsed})
-    trace_id = langfuse_context.get_current_trace_id()
-    langfuse.flush()
+        elapsed = round(time.time() - start_time, 2)
+        langfuse_context.update_current_trace(
+            output=answer,
+            metadata={"elapsed_seconds": elapsed, "cache_hit": False, "model_used": model_used},
+        )
+        trace_id = langfuse_context.get_current_trace_id()
+        langfuse.flush()
 
-    return {
-        "query": query, "answer": answer, "retrieved_chunks": retrieved_chunks,
-        "context": context, "trace_id": trace_id, "elapsed_seconds": elapsed, "mode": mode,
-    }
+        result = {
+            "query": query, "answer": answer, "retrieved_chunks": retrieved_chunks,
+            "context": context, "trace_id": trace_id, "elapsed_seconds": elapsed, "mode": mode,
+            "cache_hit": False, "model_used": model_used,
+        }
+
+    # Store in cache after pipeline runs (on miss)
+    if use_cache:
+        cache.store(query_embedding, query, result["answer"])
+
+    return result
 
 
 def _ask_advanced(query, query_embedding, start_time):
@@ -217,12 +276,13 @@ def _ask_advanced(query, query_embedding, start_time):
     candidates = hybrid_retrieve(query, query_embedding, top_k=TOP_K * 2)
     reranked = rerank(query, candidates, top_n=TOP_K + 2)
     context, final_chunks = assemble_advanced(reranked, conn_fn=get_connection, max_chars=4000, expand_window=1)
-    answer = generate(query, context)
+    answer, model_used = generate(query, context)
 
     elapsed = round(time.time() - start_time, 2)
     langfuse_context.update_current_trace(
         output=answer, metadata={
             "elapsed_seconds": elapsed, "mode": "advanced",
+            "cache_hit": False, "model_used": model_used,
             "stages": {"candidates": len(candidates), "reranked": len(reranked), "final": len(final_chunks)},
         }
     )
@@ -232,6 +292,7 @@ def _ask_advanced(query, query_embedding, start_time):
     return {
         "query": query, "answer": answer, "retrieved_chunks": final_chunks,
         "context": context, "trace_id": trace_id, "elapsed_seconds": elapsed, "mode": "advanced",
+        "cache_hit": False, "model_used": model_used,
         "pipeline_stages": {"candidates": len(candidates), "reranked": len(reranked), "final": len(final_chunks)},
     }
 
@@ -244,18 +305,26 @@ def ask_advanced(query):
     return ask(query, mode="advanced")
 
 
+def ask_cached(query):
+    """Run advanced pipeline with semantic cache. Session 5 showcase."""
+    return ask(query, mode="advanced", use_cache=True)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["dense", "hybrid", "advanced"], default="dense")
     parser.add_argument("--query", default="What is the return window for premium members during Diwali sale?")
+    parser.add_argument("--cache", action="store_true", help="Enable semantic cache (Session 5)")
     args = parser.parse_args()
 
-    result = ask(args.query, mode=args.mode)
+    result = ask(args.query, mode=args.mode, use_cache=args.cache)
 
     table = Table(title=f"RAG Result — mode: {result['mode']}", box=box.ROUNDED)
-    table.add_column("Field", style="bold", width=12)
+    table.add_column("Field", style="bold", width=14)
     table.add_column("Value")
     table.add_row("Mode", result["mode"])
+    table.add_row("Model", result.get("model_used", "—"))
+    table.add_row("Cache Hit", "[green]YES[/]" if result.get("cache_hit") else "no")
     table.add_row("Time", f"{result['elapsed_seconds']}s")
     if "pipeline_stages" in result:
         s = result["pipeline_stages"]
@@ -263,8 +332,13 @@ if __name__ == "__main__":
     console.print(table)
 
     console.print(f"\n[bold]Answer:[/] {result['answer']}\n")
-    console.print("[bold]Chunks used:[/]")
-    for i, c in enumerate(result["retrieved_chunks"], 1):
-        score = c.get("rerank_score", c.get("rrf_score", c.get("similarity", 0)))
-        tag = " [dim][expanded][/]" if c.get("is_expanded") else ""
-        console.print(f"  [{i}] [cyan]{c['doc_name']}[/] chunk {c['chunk_index']}{tag} — {score:.4f}")
+    if result["retrieved_chunks"]:
+        console.print("[bold]Chunks used:[/]")
+        for i, c in enumerate(result["retrieved_chunks"], 1):
+            score = c.get("rerank_score", c.get("rrf_score", c.get("similarity", 0)))
+            tag = " [dim][expanded][/]" if c.get("is_expanded") else ""
+            console.print(f"  [{i}] [cyan]{c['doc_name']}[/] chunk {c['chunk_index']}{tag} — {score:.4f}")
+
+    if args.cache:
+        console.print()
+        console.print("[bold]Cache Stats:[/]", get_cache().stats())
