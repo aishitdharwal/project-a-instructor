@@ -22,7 +22,6 @@ Required environment variables (set by ECS task definition in production):
 import os
 import sys
 import psycopg2
-from pgvector.psycopg2 import register_vector
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
@@ -95,7 +94,6 @@ def setup():
 
     try:
         conn = get_connection()
-        register_vector(conn)
         cur = conn.cursor()
     except Exception as e:
         console.print(f"[bold red]Connection failed:[/] {e}")
