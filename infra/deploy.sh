@@ -103,39 +103,36 @@ ok "ECR target:  ${ECR_URI}:${IMAGE_TAG}"
 # via a CloudFormation dynamic reference: {{resolve:secretsmanager:/acmera/db-password}}
 # ─────────────────────────────────────────────────────────────────────────────
 if ! $REDEPLOY; then
-  step "Storing secrets in Secrets Manager..."
+  # SSM Parameter Store — SecureString type encrypts the value at rest.
+  # --overwrite makes this idempotent: creates on first run, updates on re-runs.
+  # ECS reads these by name at task startup (no ARN needed for SSM).
+  step "Storing secrets in SSM Parameter Store..."
 
-  store_secret() {
+  store_param() {
     local name="/acmera/${1}"
     local value="${2}"
-    if aws secretsmanager describe-secret --secret-id "${name}" --region "${REGION}" &>/dev/null; then
-      aws secretsmanager put-secret-value \
-        --secret-id     "${name}" \
-        --secret-string "${value}" \
-        --region        "${REGION}" >/dev/null
-      ok "Updated: ${name}"
-    else
-      aws secretsmanager create-secret \
-        --name          "${name}" \
-        --secret-string "${value}" \
-        --region        "${REGION}" >/dev/null
-      ok "Created: ${name}"
-    fi
+    aws ssm put-parameter \
+      --name      "${name}" \
+      --value     "${value}" \
+      --type      SecureString \
+      --overwrite \
+      --region    "${REGION}" >/dev/null
+    ok "Stored: ${name}"
   }
 
-  # Generate a random DB password if /acmera/db-password doesn't exist yet.
-  # On re-runs, we keep the existing password so Aurora doesn't need to update.
-  if ! aws secretsmanager describe-secret --secret-id "/acmera/db-password" --region "${REGION}" &>/dev/null; then
-    DB_PASSWORD=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 32)
-    store_secret "db-password" "${DB_PASSWORD}"
+  # Generate a random DB password on first run; keep existing on re-runs
+  # so Aurora doesn't trigger a password-change update unnecessarily.
+  if ! aws ssm get-parameter --name "/acmera/db-password" --region "${REGION}" &>/dev/null; then
+    DB_PASSWORD=$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 32)
+    store_param "db-password" "${DB_PASSWORD}"
   else
     ok "Kept existing: /acmera/db-password"
   fi
 
-  store_secret "openai-api-key"      "${OPENAI_API_KEY}"
-  store_secret "cohere-api-key"      "${COHERE_API_KEY}"
-  store_secret "langfuse-public-key" "${LANGFUSE_PUBLIC_KEY}"
-  store_secret "langfuse-secret-key" "${LANGFUSE_SECRET_KEY}"
+  store_param "openai-api-key"      "${OPENAI_API_KEY}"
+  store_param "cohere-api-key"      "${COHERE_API_KEY}"
+  store_param "langfuse-public-key" "${LANGFUSE_PUBLIC_KEY}"
+  store_param "langfuse-secret-key" "${LANGFUSE_SECRET_KEY}"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
