@@ -98,25 +98,12 @@ ok "AWS account: ${AWS_ACCOUNT_ID}"
 ok "ECR target:  ${ECR_URI}:${IMAGE_TAG}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STEP 1 — DEPLOY BASE STACK (idempotent — safe to run even if already deployed)
+# STEP 1 — STORE SECRETS IN SECRETS MANAGER
+# DB password MUST be stored before base stack deploys — Aurora references it
+# via a CloudFormation dynamic reference: {{resolve:secretsmanager:/acmera/db-password}}
 # ─────────────────────────────────────────────────────────────────────────────
 if ! $REDEPLOY; then
-  step "Deploying base infrastructure stack (${STACK_BASE})..."
-  aws cloudformation deploy \
-    --template-file "${SCRIPT_DIR}/base-stack.yaml" \
-    --stack-name    "${STACK_BASE}" \
-    --capabilities  CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-    --region        "${REGION}" \
-    --no-fail-on-empty-changeset
-  ok "Base stack deployed"
-fi
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 2 — STORE SECRETS IN SECRETS MANAGER
-# Uses put-secret-value if secret exists, create-secret otherwise.
-# ─────────────────────────────────────────────────────────────────────────────
-if ! $REDEPLOY; then
-  step "Storing API keys in Secrets Manager..."
+  step "Storing secrets in Secrets Manager..."
 
   store_secret() {
     local name="/acmera/${1}"
@@ -136,10 +123,33 @@ if ! $REDEPLOY; then
     fi
   }
 
+  # Generate a random DB password if /acmera/db-password doesn't exist yet.
+  # On re-runs, we keep the existing password so Aurora doesn't need to update.
+  if ! aws secretsmanager describe-secret --secret-id "/acmera/db-password" --region "${REGION}" &>/dev/null; then
+    DB_PASSWORD=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 32)
+    store_secret "db-password" "${DB_PASSWORD}"
+  else
+    ok "Kept existing: /acmera/db-password"
+  fi
+
   store_secret "openai-api-key"      "${OPENAI_API_KEY}"
   store_secret "cohere-api-key"      "${COHERE_API_KEY}"
   store_secret "langfuse-public-key" "${LANGFUSE_PUBLIC_KEY}"
   store_secret "langfuse-secret-key" "${LANGFUSE_SECRET_KEY}"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 2 — DEPLOY BASE STACK (idempotent — safe to run even if already deployed)
+# ─────────────────────────────────────────────────────────────────────────────
+if ! $REDEPLOY; then
+  step "Deploying base infrastructure stack (${STACK_BASE})..."
+  aws cloudformation deploy \
+    --template-file "${SCRIPT_DIR}/base-stack.yaml" \
+    --stack-name    "${STACK_BASE}" \
+    --capabilities  CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+    --region        "${REGION}" \
+    --no-fail-on-empty-changeset
+  ok "Base stack deployed"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────

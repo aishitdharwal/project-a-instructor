@@ -131,11 +131,9 @@ Resources:
           # ── Secrets injected from Secrets Manager at task startup ──────
           # Format: ValueFrom: <secret-ARN-or-name>:<json-key>::
           Secrets:
-            # Aurora password extracted from AWS-managed secret JSON {"password":"..."}
+            # Aurora password — stored as a plain string by deploy.sh before base stack deploy
             - Name: PG_PASSWORD
-              ValueFrom: !Sub
-                - ${SecretArn}:password::
-                - SecretArn: !ImportValue AcmeraAuroraSecretArn
+              ValueFrom: /acmera/db-password
             # API keys stored by deploy.sh in /acmera/* path
             - Name: OPENAI_API_KEY
               ValueFrom: /acmera/openai-api-key
