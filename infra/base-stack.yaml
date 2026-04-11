@@ -324,6 +324,9 @@ Resources:
       SecurityGroupIds:
         - !Ref RedisSecurityGroup
       AtRestEncryptionEnabled: true
+      # Must be false when NumCacheClusters=1 (multi-AZ failover needs ≥2 nodes)
+      AutomaticFailoverEnabled: false
+      MultiAZEnabled: false
       # TransitEncryptionEnabled off for simplicity (private subnet = network isolation)
       AutoMinorVersionUpgrade: true
       Tags:
