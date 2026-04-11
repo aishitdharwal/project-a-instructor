@@ -53,7 +53,7 @@ def rerank(query: str, chunks: list, top_n: int = 5) -> list:
     if not chunks:
         return chunks
 
-    if not co.api_key:
+    if not os.getenv("COHERE_API_KEY"):
         print("Warning: COHERE_API_KEY not set — skipping reranking, returning original order.")
         return chunks[:top_n]
 
