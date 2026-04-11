@@ -1,0 +1,22 @@
+{
+  "num_queries": 20,
+  "simple_count": 16,
+  "complex_count": 4,
+  "all_gpt4o": {
+    "total_cost_inr": 1.5625,
+    "avg_per_query_inr": 0.078126,
+    "daily_5k_inr": 391.0,
+    "monthly_inr": 11719.0
+  },
+  "routed": {
+    "total_cost_inr": 0.5018,
+    "avg_per_query_inr": 0.025091,
+    "daily_5k_inr": 125.0,
+    "monthly_inr": 3764.0,
+    "model_distribution": {
+      "gpt-4o": 4,
+      "gpt-4o-mini": 16
+    }
+  },
+  "savings_pct": 67.9
+}
