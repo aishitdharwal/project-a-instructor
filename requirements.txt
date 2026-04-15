@@ -11,3 +11,7 @@ datasets
 fastapi
 uvicorn[standard]
 redis
+# Session 7
+litellm
+instructor
+langchain-openai

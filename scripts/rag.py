@@ -1,8 +1,8 @@
 """
-RAG pipeline — Instructor version, Session 5 complete.
+RAG pipeline — Instructor version, Session 7 complete.
 
 Full pipeline progression (all modes supported):
-  dense    — Week 1 baseline (pure vector similarity)
+  dense    — Session 1 baseline (pure vector similarity)
   hybrid   — Session 3: BM25 + dense + RRF fusion
   advanced — Session 4: hybrid + Cohere rerank + context engineering
   cached   — Session 5: semantic cache check before advanced pipeline
@@ -12,22 +12,35 @@ Session 5 additions:
   - semantic_cache: skips retrieval + generation on cache hit
   - result dict now includes cache_hit and model_used fields
 
+Session 7 additions:
+  - LiteLLM replaces direct OpenAI calls in generate() — provider-agnostic
+    routing (OpenAI, Anthropic, Google, any provider via one interface)
+  - guardrails=True param on ask(): runs check_input before pipeline,
+    check_output on answer — blocked queries never hit retrieval
+  - ask_structured(): returns a typed RAGResponse via Instructor instead
+    of a raw dict — confidence level, sources list, escalation flag
+
 Run:
     python -m scripts.rag                              # dense
     python -m scripts.rag --mode hybrid               # Session 3
     python -m scripts.rag --mode advanced             # Session 4
     python -m scripts.rag --mode advanced --cache     # Session 5: with cache
+    python -m scripts.rag --mode advanced --guardrails # Session 7: with guardrails
 """
 import os
 import json
 import time
 import argparse
+import litellm
+import instructor
 from openai import OpenAI
 from langfuse import Langfuse
 from langfuse.decorators import observe, langfuse_context
 import psycopg2
 from pgvector.psycopg2 import register_vector
 from rank_bm25 import BM25Okapi
+from pydantic import BaseModel
+from typing import Literal
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
@@ -35,12 +48,28 @@ from rich import box
 
 from scripts.model_router import route_model
 from scripts.semantic_cache import get_cache
+from scripts.guardrails import check_input, check_output
 
 load_dotenv()
 
 client = OpenAI()
+instructor_client = instructor.from_openai(OpenAI())
 langfuse = Langfuse()
 console = Console()
+
+
+# =============================================================================
+# SESSION 7: STRUCTURED RESPONSE MODEL
+# ask_structured() returns this instead of a raw dict.
+# Instructor extracts it from the generated answer in one LLM call.
+# =============================================================================
+
+class RAGResponse(BaseModel):
+    answer: str
+    confidence: Literal["high", "medium", "low"]
+    sources: list[str]
+    safe: bool
+    requires_escalation: bool
 
 TOP_K = 5
 BM25_CANDIDATES = TOP_K * 3
@@ -174,8 +203,17 @@ def assemble_context(retrieved_chunks):
 @observe(name="generation")
 def generate(query, context, model: str = None):
     """
-    Generate an answer. If model is not specified, route_model() picks
-    gpt-4o-mini for simple queries and gpt-4o for complex ones.
+    Generate an answer using LiteLLM (Session 7).
+
+    LiteLLM is a provider-agnostic wrapper — the same call works for
+    OpenAI, Anthropic Claude, Google Gemini, Mistral, and local models.
+    model_router still picks the model; LiteLLM executes it regardless
+    of which provider that model belongs to.
+
+    Examples of what model strings LiteLLM accepts:
+      "gpt-4o-mini"                   → OpenAI
+      "claude-3-haiku-20240307"       → Anthropic
+      "gemini/gemini-1.5-flash"       → Google
     """
     if model is None:
         model = route_model(query)
@@ -184,7 +222,8 @@ def generate(query, context, model: str = None):
         {"role": "system", "content": SYSTEM_PROMPT.format(context=context)},
         {"role": "user", "content": query},
     ]
-    response = client.chat.completions.create(
+    # litellm.completion() is a drop-in for openai.chat.completions.create()
+    response = litellm.completion(
         model=model, messages=messages, temperature=0, max_tokens=1000,
     )
     answer = response.choices[0].message.content
@@ -200,23 +239,49 @@ def generate(query, context, model: str = None):
 
 
 @observe(name="rag_pipeline")
-def ask(query, mode="dense", use_cache: bool = False, cache=None):
+def ask(query, mode="dense", use_cache: bool = False, cache=None,
+        guardrails: bool = False):
     """
     Run the RAG pipeline.
 
-    mode:      "dense" | "hybrid" | "advanced"
-    use_cache: if True, check semantic cache before retrieval.
-               On a hit, skips embedding → retrieval → generation entirely.
-               On a miss, runs the pipeline and stores the result.
-    cache:     optional SemanticCache instance. If None and use_cache=True,
-               falls back to the module-level in-memory singleton.
-               Pass a Redis-backed SemanticCache from app.py for production.
+    mode:       "dense" | "hybrid" | "advanced"
+    use_cache:  if True, check semantic cache before retrieval.
+                On a hit, skips embedding → retrieval → generation entirely.
+                On a miss, runs the pipeline and stores the result.
+    cache:      optional SemanticCache instance. Falls back to in-memory singleton.
+    guardrails: if True (Session 7), run check_input before the pipeline and
+                check_output on the answer. Blocked queries return immediately
+                without touching retrieval or generation.
     """
     start_time = time.time()
     langfuse_context.update_current_trace(
         input=query,
-        metadata={"pipeline": f"rag_{mode}", "cache_enabled": use_cache},
+        metadata={"pipeline": f"rag_{mode}", "cache_enabled": use_cache,
+                  "guardrails": guardrails},
     )
+
+    # ── Session 7: input guardrail ────────────────────────────────────────────
+    if guardrails:
+        in_guard = check_input(query)
+        if not in_guard.safe:
+            elapsed = round(time.time() - start_time, 2)
+            langfuse_context.update_current_trace(
+                output="[BLOCKED]",
+                metadata={"blocked": True, "reason": in_guard.rejection_reason,
+                          "elapsed_seconds": elapsed},
+            )
+            langfuse.flush()
+            return {
+                "query": query, "answer": in_guard.rejection_reason,
+                "retrieved_chunks": [], "context": "",
+                "trace_id": langfuse_context.get_current_trace_id(),
+                "elapsed_seconds": elapsed, "mode": mode,
+                "cache_hit": False, "model_used": None,
+                "blocked": True,
+            }
+        # Use anonymised query downstream so PII doesn't enter retrieval/logs
+        query = in_guard.anonymized_query
+    # ─────────────────────────────────────────────────────────────────────────
 
     query_embedding = embed_query(query)
 
@@ -272,6 +337,14 @@ def ask(query, mode="dense", use_cache: bool = False, cache=None):
         _cache = cache if cache is not None else get_cache()
         _cache.store(query_embedding, query, result["answer"])
 
+    # ── Session 7: output guardrail ───────────────────────────────────────────
+    if guardrails:
+        out_guard = check_output(result["answer"])
+        result["answer"] = out_guard.clean_answer
+        result["output_safe"] = out_guard.safe
+        result["pii_leaked"] = out_guard.pii_leaked
+    # ─────────────────────────────────────────────────────────────────────────
+
     return result
 
 
@@ -316,14 +389,80 @@ def ask_cached(query):
     return ask(query, mode="advanced", use_cache=True)
 
 
+def ask_structured(query: str) -> RAGResponse:
+    """
+    Session 7: Run the advanced pipeline and return a typed RAGResponse.
+
+    Uses Instructor to extract a structured response from the generated answer
+    in a single LLM call — no extra API call compared to ask().
+
+    Returns:
+        RAGResponse with answer, confidence, sources, safe, requires_escalation
+    """
+    result = ask(query, mode="advanced", guardrails=True)
+
+    if result.get("blocked"):
+        return RAGResponse(
+            answer="This request could not be processed.",
+            confidence="high",
+            sources=[],
+            safe=False,
+            requires_escalation=False,
+        )
+
+    sources = list({c["doc_name"] for c in result.get("retrieved_chunks", [])})
+
+    return instructor_client.chat.completions.create(
+        model=route_model(query),
+        response_model=RAGResponse,
+        messages=[
+            {
+                "role": "system",
+                "content": """Extract a structured RAGResponse from this customer support answer.
+
+confidence:
+  high   = answer is specific, complete, and directly references policy details
+  medium = answer is mostly complete but has some uncertainty or gaps
+  low    = answer is vague, context was insufficient, or the question was ambiguous
+
+sources: extract document names that supported the answer from the sources list provided.
+
+requires_escalation: True only if the answer explicitly cannot be resolved
+  by policy alone and a human agent must intervene (billing disputes, security issues, etc.)
+  False for standard policy questions, even complex ones.""",
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Question: {query}\n\n"
+                    f"Answer: {result['answer']}\n\n"
+                    f"Sources used: {sources}"
+                ),
+            },
+        ],
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["dense", "hybrid", "advanced"], default="dense")
     parser.add_argument("--query", default="What is the return window for premium members during Diwali sale?")
     parser.add_argument("--cache", action="store_true", help="Enable semantic cache (Session 5)")
+    parser.add_argument("--guardrails", action="store_true", help="Enable guardrails (Session 7)")
+    parser.add_argument("--structured", action="store_true", help="Return RAGResponse via Instructor (Session 7)")
     args = parser.parse_args()
 
-    result = ask(args.query, mode=args.mode, use_cache=args.cache)
+    if args.structured:
+        response = ask_structured(args.query)
+        console.print(f"\n[bold]Structured RAGResponse:[/]")
+        console.print(f"  answer:               {response.answer[:80]}...")
+        console.print(f"  confidence:           {response.confidence}")
+        console.print(f"  sources:              {response.sources}")
+        console.print(f"  safe:                 {response.safe}")
+        console.print(f"  requires_escalation:  {response.requires_escalation}")
+        import sys; sys.exit(0)
+
+    result = ask(args.query, mode=args.mode, use_cache=args.cache, guardrails=args.guardrails)
 
     table = Table(title=f"RAG Result — mode: {result['mode']}", box=box.ROUNDED)
     table.add_column("Field", style="bold", width=14)

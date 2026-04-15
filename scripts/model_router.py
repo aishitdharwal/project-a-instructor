@@ -1,15 +1,29 @@
 """
-Model Router — Session 5: Token Economics & Model Routing.
+Model Router — Session 7 update: LiteLLM multi-provider routing.
 
-Routes each query to the cheapest model that can handle it correctly.
-Simple factual lookups → gpt-4o-mini  (fast, ~17x cheaper)
-Complex reasoning      → gpt-4o       (capable, handles multi-step logic)
+Session 5: Routes each query to cheapest OpenAI model that can handle it.
+  Simple factual lookups → gpt-4o-mini  (fast, ~17x cheaper)
+  Complex reasoning      → gpt-4o       (capable, handles multi-step logic)
+
+Session 7: MODEL_SIMPLE and MODEL_COMPLEX are now LiteLLM model strings.
+  LiteLLM understands model strings from any provider — swap providers
+  without changing any code in generate() or anywhere else:
+
+  OpenAI:     "gpt-4o-mini"             / "gpt-4o"
+  Anthropic:  "claude-3-haiku-20240307"  / "claude-sonnet-4-6"
+  Google:     "gemini/gemini-1.5-flash"  / "gemini/gemini-1.5-pro"
+  Mistral:    "mistral/mistral-small"    / "mistral/mistral-large-latest"
+
+  To switch providers: change MODEL_SIMPLE and MODEL_COMPLEX below.
+  Set the matching env var (ANTHROPIC_API_KEY, GEMINI_API_KEY, etc.).
+  Nothing else changes.
 
 Key concepts taught:
   - Rule-based classification is free and deterministic — use it first
   - LLM-based fallback adds accuracy for genuinely ambiguous queries
   - The routing decision itself costs tokens — keep the classifier cheap
   - Even a simple 80/20 split (80% mini, 20% 4o) saves ~65% on generation costs
+  - LiteLLM: one interface, any provider — no vendor lock-in
 
 Complexity signals (rule-based fast path):
   - Comparison queries    → "compare", "difference", "vs", "versus"
@@ -30,6 +44,8 @@ load_dotenv()
 
 client = OpenAI()
 
+# Session 7: these are LiteLLM model strings — change provider by swapping these values.
+# Current: OpenAI. To use Anthropic instead: "claude-3-haiku-20240307" / "claude-sonnet-4-6"
 MODEL_SIMPLE = "gpt-4o-mini"
 MODEL_COMPLEX = "gpt-4o"
 
