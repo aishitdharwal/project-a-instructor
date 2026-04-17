@@ -48,6 +48,12 @@ class AskRequest(BaseModel):
     use_cache: bool = True
 
 
+class FeedbackRequest(BaseModel):
+    trace_id: str
+    rating: int          # +1 = thumbs up, -1 = thumbs down
+    comment: str = ""
+
+
 # ── Endpoints ───────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
@@ -77,6 +83,7 @@ def ask_endpoint(req: AskRequest):
             "cache_hit":       result.get("cache_hit", False),
             "model_used":      result.get("model_used", "—"),
             "elapsed_seconds": result["elapsed_seconds"],
+            "trace_id":        result.get("trace_id"),
             "chunks": [
                 {
                     "doc_name":    c["doc_name"],
@@ -88,6 +95,23 @@ def ask_endpoint(req: AskRequest):
                 for c in result.get("retrieved_chunks", [])
             ],
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/feedback")
+def feedback_endpoint(req: FeedbackRequest):
+    from langfuse import Langfuse
+    try:
+        lf = Langfuse()
+        lf.score(
+            trace_id=req.trace_id,
+            name="user_feedback",
+            value=req.rating,           # +1 or -1
+            comment=req.comment or None,
+        )
+        lf.flush()
+        return {"status": "ok"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -326,6 +350,32 @@ PROJECT_A_HTML = """<!DOCTYPE html>
       font-size: 14px;
       color: #fca5a5;
     }
+
+    /* ── Feedback ── */
+    .feedback-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid #334155;
+    }
+    .feedback-label { font-size: 12px; color: #64748b; }
+    .thumb-btn {
+      background: none;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: #94a3b8;
+      font-size: 18px;
+      width: 38px; height: 38px;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .thumb-btn:hover { border-color: #6366f1; color: #e2e8f0; }
+    .thumb-btn.selected-up   { background: #14532d; border-color: #22c55e; color: #22c55e; }
+    .thumb-btn.selected-down { background: #450a0a; border-color: #ef4444; color: #ef4444; }
+    .feedback-thanks { font-size: 12px; color: #22c55e; display: none; }
   </style>
 </head>
 <body>
@@ -392,6 +442,7 @@ PROJECT_A_HTML = """<!DOCTYPE html>
   <script>
     let selectedMode = "advanced";
     let sourcesOpen = false;
+    let currentTraceId = null;
 
     // Mode buttons
     document.querySelectorAll(".mode-btn").forEach(btn => {
@@ -434,6 +485,7 @@ PROJECT_A_HTML = """<!DOCTYPE html>
     }
 
     function renderAnswer(data) {
+      currentTraceId = data.trace_id || null;
       const cacheClass = data.cache_hit ? "hit" : "miss";
       const cacheLabel = data.cache_hit ? "Cache HIT" : "Cache miss";
       let modelClass = "meta-pill";
@@ -458,6 +510,14 @@ PROJECT_A_HTML = """<!DOCTYPE html>
             </div>`).join("")}
         </div>` : "";
 
+      const feedbackHtml = currentTraceId ? `
+        <div class="feedback-row">
+          <span class="feedback-label">Was this helpful?</span>
+          <button class="thumb-btn" id="thumbUp"   onclick="sendFeedback(1)"  title="Helpful">👍</button>
+          <button class="thumb-btn" id="thumbDown" onclick="sendFeedback(-1)" title="Not helpful">👎</button>
+          <span class="feedback-thanks" id="feedbackThanks">Thanks for your feedback!</span>
+        </div>` : "";
+
       document.getElementById("answerArea").innerHTML = `
         <div class="meta-strip">
           <span class="meta-pill ${cacheClass}">${cacheLabel}</span>
@@ -467,6 +527,7 @@ PROJECT_A_HTML = """<!DOCTYPE html>
         </div>
         <div class="answer-text">${escapeHtml(data.answer)}</div>
         ${chunksHtml}
+        ${feedbackHtml}
       `;
     }
 
@@ -495,6 +556,30 @@ PROJECT_A_HTML = """<!DOCTYPE html>
     async function clearCache() {
       await fetch("/cache", { method: "DELETE" });
       loadCacheStats();
+    }
+
+    async function sendFeedback(rating) {
+      if (!currentTraceId) return;
+      const upBtn   = document.getElementById("thumbUp");
+      const downBtn = document.getElementById("thumbDown");
+      const thanks  = document.getElementById("feedbackThanks");
+      if (!upBtn) return;
+
+      // Visual state
+      upBtn.disabled = true; downBtn.disabled = true;
+      if (rating === 1)  upBtn.classList.add("selected-up");
+      else               downBtn.classList.add("selected-down");
+
+      try {
+        await fetch("/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ trace_id: currentTraceId, rating }),
+        });
+        if (thanks) thanks.style.display = "inline";
+      } catch (e) {
+        console.error("Feedback error:", e);
+      }
     }
 
     function escapeHtml(str) {
