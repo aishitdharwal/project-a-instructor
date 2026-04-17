@@ -49,9 +49,23 @@ def setup():
         WITH (m = 16, ef_construction = 64);
     """)
 
+    # Feedback table — stores user thumbs up/down per trace
+    # Uses IF NOT EXISTS so re-running setup never wipes existing feedback data
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS feedback (
+            id         SERIAL PRIMARY KEY,
+            trace_id   TEXT        NOT NULL,
+            query      TEXT,
+            rating     SMALLINT    NOT NULL,   -- +1 thumbs up, -1 thumbs down
+            comment    TEXT,
+            source     TEXT        DEFAULT 'project-a',
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+
     cur.close()
     conn.close()
-    print("Database setup complete. Table 'chunks' created with pgvector index.")
+    print("Database setup complete. Tables 'chunks' and 'feedback' created.")
 
 
 if __name__ == "__main__":

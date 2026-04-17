@@ -69,6 +69,27 @@ SETUP_SQL = [
         "Create doc_name index",
         "CREATE INDEX IF NOT EXISTS chunks_doc_name_idx ON chunks (doc_name);",
     ),
+    # 5. Feedback table — user thumbs up/down, shared by project-a and project-b
+    #    IF NOT EXISTS so re-running setup never wipes existing feedback rows.
+    (
+        "Create feedback table",
+        """
+        CREATE TABLE IF NOT EXISTS feedback (
+            id         SERIAL PRIMARY KEY,
+            trace_id   TEXT        NOT NULL,
+            query      TEXT,
+            rating     SMALLINT    NOT NULL,   -- +1 thumbs up, -1 thumbs down
+            comment    TEXT,
+            source     TEXT        DEFAULT 'project-a',
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        );
+        """,
+    ),
+    # 6. Index on created_at — fast time-range queries on feedback
+    (
+        "Create feedback index",
+        "CREATE INDEX IF NOT EXISTS feedback_created_at_idx ON feedback (created_at DESC);",
+    ),
 ]
 
 
